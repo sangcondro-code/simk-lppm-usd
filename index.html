@@ -3504,7 +3504,12 @@ function go(v) {
     'input-jurnal': function() { jurnalSetMetode(_jurnalMetode); },
     'cetak-laporan': initCetakLaporan,
     'setup-ttd'  : renderSetupTtd,
-    'user-mgmt'  : renderUserMgmt
+    'user-mgmt'  : renderUserMgmt,
+    // Dashboard: sengaja panggil ulang updateDashboard() di sini — chart
+    // Chart.js TIDAK digambar ulang saat Dashboard tersembunyi (lihat
+    // updateDashboard()), jadi begitu user kembali ke Dashboard, chart
+    // perlu digambar ulang sekali dengan data terbaru.
+    dashboard    : updateDashboard
   };
   if (map[v]) map[v]();
 }
@@ -3533,7 +3538,15 @@ function updateDashboard() {
   document.getElementById('d-bank').innerHTML = rp(bank);
   document.getElementById('d-in').innerHTML   = rp(inn);
   document.getElementById('d-out').innerHTML  = rp(out);
-  renderCharts(inn, out);
+  // OPTIMASI PERFORMA: hancur-buat-ulang chart Chart.js itu berat (blocking
+  // main thread) — jangan lakukan kalau halaman Dashboard sedang TIDAK
+  // ditampilkan (mis. user sedang di Riwayat Transaksi lalu simpan/edit/
+  // hapus). Chart otomatis digambar lagi begitu user membuka Dashboard
+  // (lewat go('dashboard') yang juga memanggil updateDashboard()).
+  const dashView = document.getElementById('view-dashboard');
+  if (dashView && !dashView.classList.contains('d-none')) {
+    renderCharts(inn, out);
+  }
 
   // ── Banner rollover kontekstual ──────────────────────────────
   _updateRolloverBanner();
