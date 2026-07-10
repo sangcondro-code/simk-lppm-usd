@@ -2191,26 +2191,52 @@ function fmtRpBlur(el) {
   el.value = v !== 0 ? numToStr(v) : (raw === '0' ? '0,00' : '');
 }
 
-// oninput -- filter karakter tidak valid saja, jangan re-format
+// oninput -- format pemisah ribuan LANGSUNG saat mengetik (tidak perlu
+// tunggu blur/pindah field lagi). Titik ribuan ditambah/dibuang otomatis
+// setiap ketikan, posisi kursor dijaga supaya tidak "loncat".
 function fmtRpInput(el) {
   const raw = el.value;
-  // Simpan posisi kursor agar tidak loncat
   const pos = el.selectionStart;
-  // Format kurung akuntansi: (500000)
-  if (raw.startsWith('(')) {
+
+  // Format kurung akuntansi: (500000) -- kasus khusus (biasanya dari paste),
+  // biarkan seperti semula, tidak diformat live.
+  if (raw.trim().startsWith('(')) {
     el.value = raw.replace(/[^0-9().,-]/g,'');
     return;
   }
-  // Izinkan: minus di awal, angka, titik, koma
+
   const neg = raw.startsWith('-');
-  // Hapus semua kecuali angka, titik, koma, minus
-  let v = raw.replace(/[^0-9.,-]/g,'');
-  // Buang semua minus dari string bersih, lalu pasang di depan jika aslinya negatif
-  v = v.replace(/-/g,'');
-  if (neg) v = '-' + v;
-  el.value = v;
-  // Kembalikan posisi kursor (koreksi jika ada karakter dihapus)
-  try { el.setSelectionRange(pos, pos); } catch(e) {}
+
+  // Hitung berapa karakter "signifikan" (digit / koma) sebelum posisi kursor
+  // saat ini -- dipakai nanti utk menaruh kursor kembali ke posisi yang
+  // setara setelah titik ribuan ditambah/dihapus.
+  const sigBeforeCursor = (raw.slice(0, pos).match(/[0-9,]/g) || []).length;
+
+  // Hanya izinkan digit & SATU koma (pemisah desimal)
+  let s = raw.replace(/[^0-9,]/g, '');
+  const komaIdx = s.indexOf(',');
+  let intPart, decPart = null;
+  if (komaIdx !== -1) {
+    intPart = s.slice(0, komaIdx).replace(/,/g, '');
+    decPart = s.slice(komaIdx + 1).replace(/,/g, '').slice(0, 2); // maks 2 digit desimal
+  } else {
+    intPart = s;
+  }
+  intPart = intPart.replace(/^0+(?=\d)/, ''); // buang nol berlebih di depan
+
+  const intFmt = intPart ? Number(intPart).toLocaleString('id-ID') : '';
+  const result = (neg ? '-' : '') + intFmt + (komaIdx !== -1 ? ',' + (decPart || '') : '');
+  el.value = result;
+
+  // Reposisikan kursor: cari posisi di string BARU setelah sejumlah
+  // karakter signifikan (digit/koma) yang sama seperti sebelum diformat.
+  let count = 0, newPos = result.length;
+  for (let i = 0; i < result.length; i++) {
+    if (/[0-9,]/.test(result[i])) count++;
+    if (count === sigBeforeCursor) { newPos = i + 1; break; }
+  }
+  if (sigBeforeCursor === 0) newPos = neg ? 1 : 0;
+  try { el.setSelectionRange(newPos, newPos); } catch(e) {}
 }
 
 function showLoad(msg) { document.getElementById('loading-msg').innerText = msg||'Memuat...'; document.getElementById('loading').classList.add('show'); }
