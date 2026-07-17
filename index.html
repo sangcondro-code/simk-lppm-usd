@@ -2245,6 +2245,13 @@ function hideLoad()    { document.getElementById('loading').classList.remove('sh
 // ============================================================
 // UTILITY COA & AKUN
 // ============================================================
+// UUID untuk idempotency-key (mencegah DUPLIKAT saat retry jaringan). Pakai
+// crypto.randomUUID bila tersedia, dengan cadangan manual untuk browser lama.
+function _uuid() {
+  try { if (window.crypto && crypto.randomUUID) return crypto.randomUUID(); } catch(e){}
+  return 'k-' + Date.now().toString(36) + '-' +
+         Math.random().toString(36).slice(2,10) + Math.random().toString(36).slice(2,10);
+}
 function normKode(val) {
   const s = String(val === null || val === undefined ? '' : val).trim();
   if (!s || s === '0') return '';
@@ -2871,7 +2878,29 @@ function togglePassVis(inputId, iconEl) {
 // ============================================================
 function validasiTanggal(tgl, onConfirm) {
   if (!tgl) { onConfirm(); return; }
+
+  // (1) SANITY — BLOKIR tanggal yang mustahil / tahun ngawur (jaring anti salah-ketik
+  //     ekstrem, mis. 2205, 0202, 3025, atau tanggal kalender yang tidak nyata).
+  const _m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(tgl));
+  const _thnKini = new Date().getFullYear();
+  let _real = null;
+  if (_m) {
+    const _d = new Date(Number(_m[1]), Number(_m[2]) - 1, Number(_m[3]));
+    if (_d.getFullYear() === Number(_m[1]) && (_d.getMonth()+1) === Number(_m[2]) && _d.getDate() === Number(_m[3])) _real = _d;
+  }
+  if (!_real || Number(_m[1]) < 2000 || Number(_m[1]) > _thnKini + 2) {
+    Swal.fire({
+      icon: 'error',
+      title: 'Tanggal Tidak Valid',
+      html: `Tanggal <b>${tgl}</b> kelihatannya salah ketik (tanggal/bulan/tahun tidak masuk akal).<br>Perbaiki dulu sebelum menyimpan.`,
+      confirmButtonColor: '#800000'
+    });
+    return;
+  }
+
   const tahunTrx = tgl.slice(0,4);
+
+  // (2) ARSIP — tetap diblokir (perilaku lama dipertahankan).
   if (_isTahunArsip(tahunTrx)) {
     Swal.fire({
       icon: 'error',
@@ -2881,15 +2910,38 @@ function validasiTanggal(tgl, onConfirm) {
     });
     return;
   }
-  if (tahunTrx === _tahunAktif) { onConfirm(); return; }
+
+  // (3) PERINGATAN (bisa dikonfirmasi) — kumpulkan semua alasan mencurigakan dan
+  //     tampilkan dalam SATU dialog. Menangkap salah BULAN maupun salah TAHUN:
+  //       - tahun beda dari tahun aktif (perilaku lama), atau
+  //       - tanggal di MASA DEPAN (setelah hari ini) — hampir selalu salah ketik, atau
+  //       - tanggal sudah lewat LEBIH DARI 3 BULAN (kemungkinan salah bulan/tahun).
+  //     Entri bulan berjalan / beberapa bulan terakhir TIDAK diganggu (agar tidak berisik).
+  const _now   = new Date();
+  const _today = new Date(_now.getFullYear(), _now.getMonth(), _now.getDate());
+  const _pad2  = n => String(n).padStart(2,'0');
+  const _todayStr = _now.getFullYear() + '-' + _pad2(_now.getMonth()+1) + '-' + _pad2(_now.getDate());
+  const _selisihHari = Math.round((_real - _today) / 86400000); // + = masa depan, - = masa lalu
+
+  const _alasan = [];
+  if (tahunTrx !== _tahunAktif) {
+    _alasan.push(`berada di tahun <b>${tahunTrx}</b>, padahal tahun aktif sekarang <b>${_tahunAktif}</b>`);
+  }
+  if (_selisihHari > 0) {
+    _alasan.push(`berada di <b>masa depan</b> (setelah hari ini, ${_todayStr})`);
+  } else if (_selisihHari < -92) {
+    _alasan.push(`sudah lewat <b>lebih dari 3 bulan</b> dari hari ini (${_todayStr})`);
+  }
+
+  if (!_alasan.length) { onConfirm(); return; }
+
   Swal.fire({
-    title: 'Tanggal di Luar Tahun Aktif!',
-    html: `Tanggal transaksi <b>${tgl}</b> berada di tahun <b>${tahunTrx}</b>,<br>
-           sedangkan tahun aktif saat ini adalah <b>${_tahunAktif}</b>.<br><br>
-           <span class="text-muted small">Ganti tahun aktif di navbar kalau ingin input data tahun ${tahunTrx}.</span>`,
+    title: 'Periksa Tanggal Dulu',
+    html: `Tanggal transaksi <b>${tgl}</b> ${_alasan.join('<br>dan ')}.<br><br>
+           <span class="text-muted small">Pastikan tanggal, bulan, dan tahun sudah benar supaya jurnal tidak masuk ke periode yang salah.${tahunTrx !== _tahunAktif ? ' Ganti tahun aktif di navbar kalau memang mau input data tahun ' + tahunTrx + '.' : ''}</span>`,
     icon: 'warning', showCancelButton: true,
-    confirmButtonText: 'Lanjut Simpan Tetap',
-    cancelButtonText: 'Batal, Periksa Tanggal',
+    confirmButtonText: 'Ya, Tanggal Sudah Benar',
+    cancelButtonText: 'Batal, Periksa Lagi',
     confirmButtonColor: '#d97706'
   }).then(r => { if (r.isConfirmed) onConfirm(); });
 }
@@ -3478,6 +3530,10 @@ function go(v) {
 
   // FIX 8: reset form dirty flag
   _formDirty = false;
+  // Pindah halaman = mulai entri baru → buang idempotency-key lama supaya
+  // entri berikutnya memakai kunci baru (kunci hanya dipakai ulang untuk RETRY
+  // pada form yang sama tanpa pindah halaman).
+  _trxIdemKey = null; _jrnIdemKey = null;
 
   VIEWS.forEach(id => {
     const el = document.getElementById('view-'+id);
@@ -3653,6 +3709,11 @@ function _getSaldoKasSampaiTgl(tgl) {
   return sal;
 }
 
+// Idempotency-key per-form: dibuat SEKALI, DIPAKAI ULANG saat retry (supaya
+// server mengenali kiriman yang sama dan tidak menyimpan dobel), lalu di-null-kan
+// begitu simpan sukses supaya transaksi berikutnya memperoleh kunci baru.
+let _trxIdemKey = null;
+let _jrnIdemKey = null;
 function saveTrx(e) {
   e.preventDefault();
   const lawan = document.getElementById('trx-akun-lawan').value;
@@ -3680,13 +3741,18 @@ function saveTrx(e) {
       lpj_status: lpjSt, rincian: rin
     };
     showLoad('Menyimpan transaksi...');
+    if (!_trxIdemKey) _trxIdemKey = _uuid();
+    trx.idemKey = _trxIdemKey;
     google.script.run
       .withSuccessHandler(r => {
         hideLoad();
         if (r.success) {
           trx.id = r.id;
           trx.lastModified = r.lastModified;
-          dbJurnal.push(trx);
+          _trxIdemKey = null;
+          if (!dbJurnal.some(x => String(x.id) === String(r.id)))
+            dbJurnal.push({ tanggal:trx.tanggal, jenis:trx.jenis, bukti:trx.bukti, keterangan:trx.keterangan, penanggung_jawab:trx.penanggung_jawab, lpj_status:trx.lpj_status, rincian: normRincian(trx.rincian), id: r.id, lastModified: r.lastModified });
+          if (r.version) _lastKnownJurnalVersion = r.version;
           _lastTrx = trx;
           updateDashboard();
           document.getElementById('formTrx').reset();
@@ -3880,6 +3946,7 @@ function hitungBalanceJurnal() {
 }
 
 function resetJurnal() {
+  _jrnIdemKey = null; // form jurnal di-reset → mulai entri baru, kunci baru
   var bukti = document.getElementById('j-bukti'); if (bukti) bukti.value = '';
   var jenis = document.getElementById('j-jenis'); if (jenis) jenis.value = 'JURNAL_UMUM';
   var tgl   = document.getElementById('j-tgl');
@@ -3926,12 +3993,17 @@ function saveJurnal(e) {
       rincian
     };
     showLoad('Menyimpan jurnal...');
+    if (!_jrnIdemKey) _jrnIdemKey = _uuid();
+    trx.idemKey = _jrnIdemKey;
     google.script.run
       .withSuccessHandler(r => {
         hideLoad();
         if (r.success) {
           trx.id = r.id;
-          dbJurnal.push({ ...trx, rincian: normRincian(trx.rincian), lastModified: r.lastModified });
+          _jrnIdemKey = null;
+          if (!dbJurnal.some(x => String(x.id) === String(r.id)))
+            dbJurnal.push({ tanggal:trx.tanggal, jenis:trx.jenis, bukti:trx.bukti, keterangan:trx.keterangan, penanggung_jawab:trx.penanggung_jawab, lpj_status:trx.lpj_status, rincian: normRincian(trx.rincian), id: r.id, lastModified: r.lastModified });
+          if (r.version) _lastKnownJurnalVersion = r.version;
           updateDashboard();
           Swal.fire({icon:'success', title:'Jurnal Disimpan!', timer:1200, showConfirmButton:false});
           resetJurnal();
@@ -4430,6 +4502,7 @@ function submitEditTrx() {
     lpj_status: _editArah==='KELUAR' ? document.getElementById('edit-trx-lpj').value : 'TANPA_LPJ', rincian:rin,
     lastModified: old.lastModified // dipakai server utk deteksi konflik edit bersamaan
   };
+  validasiTanggal(newData.tanggal, () => {
   showLoad('Menyimpan perubahan...');
   // PENTING: pakai updateData (edit di tempat) — BUKAN deleteData+saveData.
   // deleteData+saveData akan menghapus baris lalu membuat baris BARU di
@@ -4441,6 +4514,7 @@ function submitEditTrx() {
       if (r.success) {
         const idx = dbJurnal.findIndex(x => String(x.id)===String(id));
         if (idx>=0) dbJurnal[idx] = { ...newData, rincian: normRincian(newData.rincian), lastModified: r.lastModified };
+        if (r.version) _lastKnownJurnalVersion = r.version;
         bootstrap.Modal.getInstance(document.getElementById('modalEditTrx')).hide();
         renderRiwayat(); updateDashboard();
         Swal.fire({icon:'success',title:'Berhasil!',timer:1400,showConfirmButton:false});
@@ -4452,6 +4526,7 @@ function submitEditTrx() {
     })
     .withFailureHandler(e => { hideLoad(); Swal.fire('Error',''+e,'error'); })
     .updateData(newData, _username, _sessionToken);
+  });
 }
 
 // ============================================================
@@ -4962,6 +5037,7 @@ function submitEditJurnal() {
     lastModified     : old.lastModified // dipakai server utk deteksi konflik edit bersamaan
   };
 
+  validasiTanggal(newData.tanggal, () => {
   showLoad('Menyimpan...');
   // PENTING: pakai updateData (edit di tempat) — BUKAN deleteData+saveData.
   // Lihat catatan di submitEditTrx() untuk alasannya (urutan & referensi ID).
@@ -4971,6 +5047,7 @@ function submitEditJurnal() {
       if (r.success) {
         const idx = dbJurnal.findIndex(x=>String(x.id)===String(id));
         if (idx>=0) dbJurnal[idx] = {...newData, rincian: normRincian(newData.rincian), lastModified: r.lastModified};
+        if (r.version) _lastKnownJurnalVersion = r.version;
         bootstrap.Modal.getInstance(document.getElementById('modalEditJurnal')).hide();
         renderRiwayatJurnal(); updateDashboard();
         Swal.fire({icon:'success',title:'Jurnal diperbarui!',timer:1400,showConfirmButton:false});
@@ -4982,6 +5059,7 @@ function submitEditJurnal() {
     })
     .withFailureHandler(e=>{hideLoad();Swal.fire('Error',''+e,'error');})
     .updateData(newData, _username, _sessionToken);
+  });
 }
 
 // FIX 7: Konfirmasi berlapis hapus jurnal
@@ -6403,7 +6481,20 @@ function jtblKey(evt, id, field) {
   }
 }
 
-function jtblSimpanSemua() {
+// Cek cepat apakah string tanggal "YYYY-MM-DD" masuk akal: format benar, tanggal
+// kalender nyata, dan tahun dalam rentang wajar [2000..tahunKini+2]. Dipakai jurnal
+// tabel (impor massal) untuk MEMBLOK baris yang jelas salah ketik tanggal/bulan/tahun.
+function _tglMasukAkal(tgl) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(tgl||''));
+  if (!m) return false;
+  const th = Number(m[1]);
+  const d = new Date(th, Number(m[2])-1, Number(m[3]));
+  if (d.getFullYear()!==th || (d.getMonth()+1)!==Number(m[2]) || d.getDate()!==Number(m[3])) return false;
+  const thnKini = new Date().getFullYear();
+  return th >= 2000 && th <= thnKini + 2;
+}
+
+function jtblSimpanSemua(_lewatiPeringatanPeriode) {
   const valid = _jtblRows.filter(r => r.nominal > 0);
   if (!valid.length) { Swal.fire('Peringatan','Tidak ada baris yang terisi.','warning'); return; }
 
@@ -6415,13 +6506,55 @@ function jtblSimpanSemua() {
     else if (_isTahunArsip(String(r.tgl).slice(0,4))) {
       errors.push('Baris ' + (i+1) + ': Tahun ' + String(r.tgl).slice(0,4) + ' sudah diarsipkan dan tidak bisa diedit lagi');
     }
+    else if (!_tglMasukAkal(r.tgl)) {
+      errors.push('Baris ' + (i+1) + ': Tanggal "' + r.tgl + '" tidak masuk akal (cek tanggal/bulan/tahun)');
+    }
   });
   if (errors.length) {
     Swal.fire({ icon:'warning', title:'Periksa Data', html:errors.slice(0,6).join('<br>'), width:'460px' });
     return;
   }
 
+  // Peringatan agregat (bisa dikonfirmasi) untuk impor massal: tangkap baris yang
+  // tahunnya BEDA dari tahun aktif, atau tanggalnya di MASA DEPAN / lewat >3 bulan —
+  // pola khas salah ketik/paste yang membuat jurnal "acak di tahun/bulan salah".
+  if (!_lewatiPeringatanPeriode) {
+    const _todayJ = new Date();
+    const _today0 = new Date(_todayJ.getFullYear(), _todayJ.getMonth(), _todayJ.getDate());
+    const _peringatan = [];
+    valid.forEach((r, i) => {
+      const _th = String(r.tgl).slice(0,4);
+      let _ket = '';
+      if (_th !== _tahunAktif) {
+        _ket = 'tahun ' + _th + ' (bukan tahun aktif ' + _tahunAktif + ')';
+      } else {
+        const _mm = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(r.tgl));
+        const _dd = _mm ? new Date(Number(_mm[1]), Number(_mm[2])-1, Number(_mm[3])) : null;
+        if (_dd) {
+          const _beda = Math.round((_dd - _today0)/86400000);
+          if (_beda > 0) _ket = 'tanggal di masa depan';
+          else if (_beda < -92) _ket = 'lewat lebih dari 3 bulan';
+        }
+      }
+      if (_ket) _peringatan.push('Baris ' + (i+1) + ': ' + r.tgl + ' — ' + _ket);
+    });
+    if (_peringatan.length) {
+      Swal.fire({
+        title: 'Periksa Tanggal (' + _peringatan.length + ' baris)',
+        html: '<div class="text-start small">' + _peringatan.slice(0,8).join('<br>') +
+              (_peringatan.length > 8 ? '<br>…+' + (_peringatan.length-8) + ' baris lain' : '') +
+              '</div><br><span class="text-muted small">Pastikan tahun/bulan sudah benar supaya jurnal tidak masuk ke periode yang salah.</span>',
+        icon: 'warning', showCancelButton: true,
+        confirmButtonText: 'Ya, Sudah Benar — Lanjut',
+        cancelButtonText: 'Batal, Periksa Lagi',
+        confirmButtonColor: '#d97706', width: '480px'
+      }).then(res => { if (res.isConfirmed) jtblSimpanSemua(true); });
+      return;
+    }
+  }
+
   const trxList = valid.map(r => ({
+    idemKey: (r._idem || (r._idem = _uuid())),
     tanggal: r.tgl, jenis: r.jenis, bukti: r.bukti,
     keterangan: r.ket || r.bukti,
     penanggung_jawab: 'LPPM USD (Manual)', lpj_status: 'TANPA_LPJ',
@@ -6501,8 +6634,10 @@ function jtblSimpanUrut(list, idx) {
   google.script.run
     .withSuccessHandler(r => {
       if (r.success) {
-        const saved = Object.assign({}, list[idx], { id: r.id });
-        dbJurnal.push(Object.assign({}, saved, { rincian: normRincian(saved.rincian) }));
+        const { idemKey: _ik, ...clean } = list[idx];
+        if (r.version) _lastKnownJurnalVersion = r.version;
+        if (!dbJurnal.some(x => String(x.id) === String(r.id)))
+          dbJurnal.push(Object.assign({}, clean, { id: r.id, rincian: normRincian(clean.rincian) }));
         jtblSimpanUrut(list, idx + 1);
       } else { hideLoad(); Swal.fire('Error', r.message, 'error'); }
     })
