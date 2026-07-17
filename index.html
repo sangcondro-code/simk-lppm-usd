@@ -2912,16 +2912,20 @@ function validasiTanggal(tgl, onConfirm) {
   }
 
   // (3) PERINGATAN (bisa dikonfirmasi) — kumpulkan semua alasan mencurigakan dan
-  //     tampilkan dalam SATU dialog. Menangkap salah BULAN maupun salah TAHUN:
-  //       - tahun beda dari tahun aktif (perilaku lama), atau
-  //       - tanggal di MASA DEPAN (setelah hari ini) — hampir selalu salah ketik, atau
-  //       - tanggal sudah lewat LEBIH DARI 3 BULAN (kemungkinan salah bulan/tahun).
-  //     Entri bulan berjalan / beberapa bulan terakhir TIDAK diganggu (agar tidak berisik).
+  //     tampilkan dalam SATU dialog. Menangkap:
+  //       - tahun beda dari tahun aktif,
+  //       - tanggal di MASA DEPAN,
+  //       - BULAN beda dari bulan kalender saat ini (pola khas salah ketik/paste bulan),
+  //       - tanggal sudah lewat >3 bulan (fallback untuk yang tidak terdeteksi bulan).
+  //     Entri hari ini dan kemarin TIDAK diganggu (agar tidak berisik).
   const _now   = new Date();
   const _today = new Date(_now.getFullYear(), _now.getMonth(), _now.getDate());
   const _pad2  = n => String(n).padStart(2,'0');
   const _todayStr = _now.getFullYear() + '-' + _pad2(_now.getMonth()+1) + '-' + _pad2(_now.getDate());
+  const _bulanIni = _now.getMonth() + 1;  // 1-12
+  const _thnKalender = _now.getFullYear();
   const _selisihHari = Math.round((_real - _today) / 86400000); // + = masa depan, - = masa lalu
+  const _bulanTrx    = Number(String(tgl).slice(5,7));
 
   const _alasan = [];
   if (tahunTrx !== _tahunAktif) {
@@ -2929,6 +2933,11 @@ function validasiTanggal(tgl, onConfirm) {
   }
   if (_selisihHari > 0) {
     _alasan.push(`berada di <b>masa depan</b> (setelah hari ini, ${_todayStr})`);
+  } else if (tahunTrx === _tahunAktif && _bulanTrx !== _bulanIni && Number(tahunTrx) === _thnKalender) {
+    // Bulan kalender tidak cocok — ini yang paling sering terjadi saat user salah
+    // bulan di tahun yang sama (mis. input Juli tapi tanggal masih Januari).
+    const _pad2b = n => String(n).padStart(2,'0');
+    _alasan.push(`bulannya <b>${_pad2b(_bulanTrx)}</b> (bukan bulan ini, ${_pad2b(_bulanIni)})`);
   } else if (_selisihHari < -92) {
     _alasan.push(`sudah lewat <b>lebih dari 3 bulan</b> dari hari ini (${_todayStr})`);
   }
@@ -3374,6 +3383,7 @@ function _pollForUpdates() {
   if (_formDirty) return;                       // jangan ganggu user yang sedang mengisi form
   if (document.hidden) return;                   // tab tidak aktif — hemat kuota
   if (document.querySelector('.modal.show')) return; // ada modal terbuka — jangan timpa render-nya
+  if (document.getElementById('loading')?.classList.contains('show')) return; // sedang menyimpan/memuat — jangan timpa
 
   google.script.run
     .withSuccessHandler(res => {
@@ -6519,11 +6529,14 @@ function jtblSimpanSemua(_lewatiPeringatanPeriode) {
   // tahunnya BEDA dari tahun aktif, atau tanggalnya di MASA DEPAN / lewat >3 bulan —
   // pola khas salah ketik/paste yang membuat jurnal "acak di tahun/bulan salah".
   if (!_lewatiPeringatanPeriode) {
-    const _todayJ = new Date();
-    const _today0 = new Date(_todayJ.getFullYear(), _todayJ.getMonth(), _todayJ.getDate());
+    const _todayJ  = new Date();
+    const _today0  = new Date(_todayJ.getFullYear(), _todayJ.getMonth(), _todayJ.getDate());
+    const _bulanIniJ   = _todayJ.getMonth() + 1;  // 1-12
+    const _thnKalenderJ = _todayJ.getFullYear();
     const _peringatan = [];
     valid.forEach((r, i) => {
-      const _th = String(r.tgl).slice(0,4);
+      const _th    = String(r.tgl).slice(0,4);
+      const _blTrx = Number(String(r.tgl).slice(5,7));
       let _ket = '';
       if (_th !== _tahunAktif) {
         _ket = 'tahun ' + _th + ' (bukan tahun aktif ' + _tahunAktif + ')';
@@ -6532,8 +6545,15 @@ function jtblSimpanSemua(_lewatiPeringatanPeriode) {
         const _dd = _mm ? new Date(Number(_mm[1]), Number(_mm[2])-1, Number(_mm[3])) : null;
         if (_dd) {
           const _beda = Math.round((_dd - _today0)/86400000);
-          if (_beda > 0) _ket = 'tanggal di masa depan';
-          else if (_beda < -92) _ket = 'lewat lebih dari 3 bulan';
+          if (_beda > 0) {
+            _ket = 'tanggal di masa depan';
+          } else if (Number(_th) === _thnKalenderJ && _blTrx !== _bulanIniJ) {
+            // Bulan berbeda dari bulan kalender — paling umum saat paste data lama
+            const p2 = n => String(n).padStart(2,'0');
+            _ket = 'bulan ' + p2(_blTrx) + ' (bukan bulan ini ' + p2(_bulanIniJ) + ')';
+          } else if (_beda < -92) {
+            _ket = 'lewat lebih dari 3 bulan';
+          }
         }
       }
       if (_ket) _peringatan.push('Baris ' + (i+1) + ': ' + r.tgl + ' — ' + _ket);
