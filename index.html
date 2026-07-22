@@ -8699,12 +8699,24 @@ var _CSS = [
   '}'
 ].join('');
 
+// Label laporan untuk judul PDF / nama file -- untuk 'unit', sertakan nama
+// unit spesifik kalau user memfilter ke satu unit (bukan "Semua Unit"),
+// supaya nama file tidak generik "Laporan Unit" saja tanpa tahu unit mana.
+function clLabelLaporan(key) {
+  if (key === 'unit') {
+    var kodeUnit = (document.getElementById('cl-unit-akun') || {}).value || '';
+    if (!_clUnitSemua && kodeUnit) return 'Laporan Unit - ' + namaAkun(kodeUnit);
+    return 'Laporan Unit (Semua Unit)';
+  }
+  return _clNamaFolder[key] || key;
+}
+
 function clDownloadPDF(dari,sampai,period){
   var sels=Array.from(_clSelected),first=true;
   // Judul dokumen eksplisit sesuai laporan yang dipilih + periode, supaya saat
   // "Cetak / PDF" (Save as PDF), nama file yang disarankan browser jelas --
   // tidak lagi hanya "SIMK LPPM USD" untuk semua jenis laporan.
-  var namaLaporanSel = sels.map(function(k){ return _clNamaFolder[k] || k; });
+  var namaLaporanSel = sels.map(clLabelLaporan);
   var judulPdf = (namaLaporanSel.length <= 2
       ? namaLaporanSel.join(' & ')
       : namaLaporanSel[0] + ' dkk (' + namaLaporanSel.length + ' Laporan)')
@@ -10200,7 +10212,19 @@ function clDownloadExcel(dari,sampai,period){
   var namaFilePeriode = (!dari && !sampai) ? 'SemuaPeriode'
     : (!sampai || sampai===dari) ? clFormatNamaFileBulan(dari)
     : clFormatNamaFileBulan(dari)+'_sd_'+clFormatNamaFileBulan(sampai);
-  var namaFileSel = sels.map(function(k){ return _clNamaFile[k] || k; }).join('_');
+  // Nama laporan untuk nama file -- untuk 'unit', sertakan kode/nama unit
+  // spesifik kalau difilter ke satu unit (bukan "Semua Unit").
+  function _clLabelLaporanFile(key) {
+    if (key === 'unit') {
+      var kodeUnit = (document.getElementById('cl-unit-akun') || {}).value || '';
+      if (!_clUnitSemua && kodeUnit) {
+        return 'LaporanUnit-' + String(namaAkun(kodeUnit)||kodeUnit).replace(/[\\/:*?"<>|]/g,'-');
+      }
+      return 'LaporanUnitSemua';
+    }
+    return _clNamaFile[key] || key;
+  }
+  var namaFileSel = sels.map(_clLabelLaporanFile).join('_');
   a.download = namaFileSel + '_' + namaFilePeriode + '.csv';
   document.body.appendChild(a);a.click();
   document.body.removeChild(a);URL.revokeObjectURL(url);
