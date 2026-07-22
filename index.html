@@ -7698,7 +7698,12 @@ function showBkkPreview(opts) {
   // "ketabrak" CSS global dari halaman utama.
   let css = '';
   document.querySelectorAll('style').forEach(function(s){ css += s.textContent; });
-  const fullHtml = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title></title><style>'
+  // Judul dokumen dibuat eksplisit (jenis + no. bukti + tanggal) supaya saat
+  // di-print/"Save as PDF", nama file yang disarankan browser sesuai bukti
+  // yang sedang dicetak -- bukan ikut nama aplikasi (SIMK LPPM USD) atau kosong.
+  const bkkTitle = (opts.jenis || 'Bukti') + (opts.noBukti ? ' - ' + opts.noBukti : '')
+    + (opts.tanggal ? ' - ' + opts.tanggal : '') + ' - LPPM USD';
+  const fullHtml = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>' + esc(bkkTitle) + '</title><style>'
     + css
     + '@page{size:A4 portrait;margin:0;}'
     + 'html,body{margin:0;padding:16px;background:#f3f4f6;}'
@@ -8686,9 +8691,17 @@ var _CSS = [
 ].join('');
 
 function clDownloadPDF(dari,sampai,period){
-  var html='<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Laporan LPPM USD</title>'
-    +'<style>'+_CSS+'</style></head><body>';
   var sels=Array.from(_clSelected),first=true;
+  // Judul dokumen eksplisit sesuai laporan yang dipilih + periode, supaya saat
+  // "Cetak / PDF" (Save as PDF), nama file yang disarankan browser jelas --
+  // tidak lagi hanya "SIMK LPPM USD" untuk semua jenis laporan.
+  var namaLaporanSel = sels.map(function(k){ return _clNamaFolder[k] || k; });
+  var judulPdf = (namaLaporanSel.length <= 2
+      ? namaLaporanSel.join(' & ')
+      : namaLaporanSel[0] + ' dkk (' + namaLaporanSel.length + ' Laporan)')
+    + ' - ' + period + ' - LPPM USD';
+  var html='<!DOCTYPE html><html><head><meta charset="UTF-8"><title>'+esc(judulPdf)+'</title>'
+    +'<style>'+_CSS+'</style></head><body>';
 
   sels.forEach(function(key){
     if(!first)html+='<div class="pb"></div>';
@@ -9227,8 +9240,11 @@ function clDownloadPDF(dari,sampai,period){
   var frame   = document.getElementById('cl-print-frame');
   if (!overlay || !frame) { var w=window.open('','_blank'); if(w){w.document.write(html);w.document.close();} return; }
   var doc = frame.contentDocument || frame.contentWindow.document;
-  // Hapus title agar browser tidak print URL/judul di header/footer
-  html = html.replace(/<title>[^<]*<\/title>/, '<title></title>');
+  // CATATAN: title SENGAJA TIDAK dikosongkan (berbeda dari versi sebelumnya) --
+  // title dipakai browser sebagai usulan nama file saat "Cetak / PDF" (Save as
+  // PDF). Kalau muncul di header/footer cetak, itu wajar & justru membantu
+  // (menunjukkan jenis laporan); user tinggal matikan "Headers and footers"
+  // di dialog print kalau tidak ingin ditampilkan.
   doc.open(); doc.write(html); doc.close();
   window._clFrame = frame;
   overlay.style.display = 'flex';
@@ -10042,6 +10058,70 @@ function clDownloadExcel(dari,sampai,period){
         q(_csvSel(tot.akD,tot.akK)),q(_csvSel(tot.akK,tot.akD))].join(C)+R+R;
     }
 
+    // FIX: sebelumnya key 'neracalajurttd' (Neraca Lajur — Lembar Persetujuan)
+    // tidak punya handler sama sekali di clDownloadExcel -- kalau user hanya
+    // mencentang laporan ini lalu Download Excel, file CSV yang dihasilkan
+    // kosong (hanya BOM). Sekarang datanya sama seperti Neraca Lajur biasa.
+    if(key==='neracalajurttd'){
+      var tot3={saD:0,saK:0,mD:0,mK:0,kmD:0,kmK:0,akD:0,akK:0};
+      out+=q('NERACA LAJUR (LEMBAR PERSETUJUAN)')+C+q('Periode: '+period)+R;
+      out+=[q('Kode'),q('Nama Akun'),
+        q('Saldo Awal Debet'),q('Saldo Awal Kredit'),
+        q('Mutasi Debet'),q('Mutasi Kredit'),
+        q('Kumulatif Debet'),q('Kumulatif Kredit'),
+        q('Saldo Akhir Debet'),q('Saldo Akhir Kredit')].join(C)+R;
+      coaData.forEach(function(ak){
+        var sa=getSaldo(ak.kode, _tahunAktif);
+        var mSblmD=0,mSblmK=0;
+        if(dari){
+          dbJurnal.forEach(function(t){
+            var bln=(t.tanggal||'').slice(0,7);
+            if(bln<dari){
+              t.rincian.forEach(function(r){if(r.kode_akun===ak.kode){mSblmD+=r.debit||0;mSblmK+=r.kredit||0;}});
+            }
+          });
+        }
+        var saAwalNet=ak.tipe==='Debit'?(sa+mSblmD-mSblmK):(sa+mSblmK-mSblmD);
+        var saD=ak.tipe==='Debit'?saAwalNet:0,saK=ak.tipe==='Kredit'?saAwalNet:0;
+        var mD=0,mK=0;
+        dbJurnal.forEach(function(t){
+          var bln=(t.tanggal||'').slice(0,7);
+          if(dari&&bln<dari)return;
+          if(sampai&&bln>sampai)return;
+          t.rincian.forEach(function(r){if(r.kode_akun===ak.kode){mD+=r.debit||0;mK+=r.kredit||0;}});
+        });
+        var kmD=( num(window._kumD&&window._kumD[ak.kode])||0),kmK=(num(window._kumK&&window._kumK[ak.kode])||0);
+        dbJurnal.forEach(function(t){
+          var bln=(t.tanggal||'').slice(0,7);
+          if(sampai&&bln>sampai)return;
+          t.rincian.forEach(function(r){if(r.kode_akun===ak.kode){kmD+=r.debit||0;kmK+=r.kredit||0;}});
+        });
+        var akD=0,akK=0;
+        if(ak.tipe==='Debit'){akD=saAwalNet+mD-mK;}
+        else{akK=saAwalNet+mK-mD;}
+        if(!saD&&!saK&&!mD&&!mK&&!kmD&&!kmK&&!akD&&!akK)return;
+        tot3.saD+=saD>=0?saD:0;tot3.saK+=saK>=0?saK:0;
+        if(saD<0)tot3.saK+=Math.abs(saD);if(saK<0)tot3.saD+=Math.abs(saK);
+        tot3.mD+=mD;tot3.mK+=mK;tot3.kmD+=kmD;tot3.kmK+=kmK;tot3.akD+=akD;tot3.akK+=akK;
+        out+=[q(ak.kode),q(ak.nama),
+          saD!==0?q(clRp(saD)):'',saK!==0?q(clRp(saK)):'',
+          mD>0?q(clRp(mD)):'',mK>0?q(clRp(mK)):'',
+          kmD>0?q(clRp(kmD)):'',kmK>0?q(clRp(kmK)):'',
+          akD!==0?q(clRp(akD)):'',akK!==0?q(clRp(akK)):''].join(C)+R;
+      });
+      out+=[q('TOTAL'),'',
+        q(clRp(tot3.saD)),q(clRp(tot3.saK)),
+        q(clRp(tot3.mD)),q(clRp(tot3.mK)),
+        q(clRp(tot3.kmD)),q(clRp(tot3.kmK)),
+        q(clRp(tot3.akD)),q(clRp(tot3.akK))].join(C)+R;
+      function _csvSel3(d,k){var s=Math.abs(d-k);return s<1?'0':clRp(s);}
+      out+=[q('Selisih'),'',
+        q(_csvSel3(tot3.saD,tot3.saK)),q(_csvSel3(tot3.saK,tot3.saD)),
+        q(_csvSel3(tot3.mD,tot3.mK)),q(_csvSel3(tot3.mK,tot3.mD)),
+        q(_csvSel3(tot3.kmD,tot3.kmK)),q(_csvSel3(tot3.kmK,tot3.kmD)),
+        q(_csvSel3(tot3.akD,tot3.akK)),q(_csvSel3(tot3.akK,tot3.akD))].join(C)+R+R;
+    }
+
     if(key==='unit'){
       var unitMap={};
       dbJurnal.forEach(function(t){
@@ -10096,7 +10176,14 @@ function clDownloadExcel(dari,sampai,period){
   var url=URL.createObjectURL(blob);
   var a=document.createElement('a');
   a.href=url;
-  a.download='Laporan_LPPM_'+(dari||'semua')+(sampai&&sampai!==dari?'_sd_'+sampai:'')+'.csv';
+  // Nama file eksplisit sesuai laporan yang dipilih (mis. "TransaksiKas_JurnalUmum_Jul2026.csv")
+  // -- sebelumnya SEMUA export Excel selalu diberi nama generik "Laporan_LPPM_...", tidak
+  // menunjukkan laporan apa isinya.
+  var namaFilePeriode = (!dari && !sampai) ? 'SemuaPeriode'
+    : (!sampai || sampai===dari) ? clFormatNamaFileBulan(dari)
+    : clFormatNamaFileBulan(dari)+'_sd_'+clFormatNamaFileBulan(sampai);
+  var namaFileSel = sels.map(function(k){ return _clNamaFile[k] || k; }).join('_');
+  a.download = namaFileSel + '_' + namaFilePeriode + '.csv';
   document.body.appendChild(a);a.click();
   document.body.removeChild(a);URL.revokeObjectURL(url);
   Swal.fire({icon:'success',title:'Download Berhasil',html:'File CSV siap dibuka di Excel.',timer:2000,showConfirmButton:false});
