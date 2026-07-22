@@ -7717,6 +7717,13 @@ function showBkkPreview(opts) {
   const doc   = frame.contentDocument || frame.contentWindow.document;
   doc.open(); doc.write(fullHtml); doc.close();
   window._bkkFrame = frame;
+  // PENTING: saat print dipicu dari DALAM iframe (frame.contentWindow.print()),
+  // Chrome/Edge mengambil usulan nama file "Save as PDF" dari judul TAB/WINDOW
+  // UTAMA (parent), BUKAN dari <title> milik iframe -- makanya title di atas saja
+  // tidak cukup. Judul tab utama ikut diganti sementara di sini, dan dikembalikan
+  // lagi di closeBkkPreview().
+  if (window._bkkPrevTitle === undefined) window._bkkPrevTitle = document.title;
+  document.title = bkkTitle;
   document.getElementById('bkk-preview-overlay').style.display = 'flex';
   document.getElementById('bkk-print-area').innerHTML = bodyHtml;
 }
@@ -7725,6 +7732,8 @@ function closeBkkPreview() {
   document.getElementById('bkk-preview-overlay').style.display = 'none';
   var f = document.getElementById('bkk-print-frame');
   if (f) f.src = 'about:blank';
+  // Kembalikan judul tab utama ke semula
+  if (window._bkkPrevTitle !== undefined) { document.title = window._bkkPrevTitle; window._bkkPrevTitle = undefined; }
 }
 
 function doCetakBkk() {
@@ -9247,6 +9256,13 @@ function clDownloadPDF(dari,sampai,period){
   // di dialog print kalau tidak ingin ditampilkan.
   doc.open(); doc.write(html); doc.close();
   window._clFrame = frame;
+  // PENTING: saat print dipicu dari DALAM iframe (frame.contentWindow.print()),
+  // Chrome/Edge mengambil usulan nama file "Save as PDF" dari judul TAB/WINDOW
+  // UTAMA (parent), BUKAN dari <title> milik iframe -- title iframe di atas saja
+  // TIDAK CUKUP untuk mengubah nama file. Judul tab utama ikut diganti sementara
+  // di sini, dan dikembalikan lagi di clClosePrint().
+  if (window._clPrevTitle === undefined) window._clPrevTitle = document.title;
+  document.title = judulPdf;
   overlay.style.display = 'flex';
 }
 
@@ -9254,6 +9270,8 @@ function clDownloadPDF(dari,sampai,period){
 function clClosePrint(){
   document.getElementById('cl-print-overlay').style.display='none';
   var f=document.getElementById('cl-print-frame'); if(f)f.src='about:blank';
+  // Kembalikan judul tab utama ke semula
+  if (window._clPrevTitle !== undefined) { document.title = window._clPrevTitle; window._clPrevTitle = undefined; }
 }
 function clDoPrint(){
   var f=window._clFrame||document.getElementById('cl-print-frame');
